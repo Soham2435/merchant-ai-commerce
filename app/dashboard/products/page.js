@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
+import { CreateProductForm } from "./create-product-form";
 
 export default async function ProductsPage() {
   const supabase = await createClient();
@@ -56,10 +57,21 @@ export default async function ProductsPage() {
     );
   }
 
+  const { data: merchants, error: merchantsError } = await supabase
+    .from("merchants")
+    .select("id, currency")
+    .in("id", merchantIds);
+
+  if (merchantsError) {
+    throw new Error(merchantsError.message);
+  }
+
+  const currency = merchants?.[0]?.currency ?? "INR";
+
   const { data: products, error: productsError } = await supabase
     .from("products")
     .select(
-      "id, name, description, category, price_minor, currency, is_active, sku, created_at"
+      "id, name, description, category, price_minor, currency, is_active, sku,created_at"
     )
     .in("merchant_id", merchantIds)
     .order("created_at", { ascending: false });
@@ -75,6 +87,8 @@ export default async function ProductsPage() {
         title="Products"
         description="Keep your catalog organized and ready for your customers."
       />
+
+      <CreateProductForm currency={currency} />
 
       {products.length === 0 ? (
         <EmptyState
