@@ -1,16 +1,23 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useActionState, useState } from "react";
 import { RazorpayCheckout } from "@/app/dashboard/orders/razorpay-checkout";
+import { provisionBuyerSpendingAuthorization } from "./actions";
 
-export function BuyerShell({ signedIn, products }) {
+export function BuyerShell({ signedIn, products, authorization }) {
   const [intent, setIntent] = useState("");
   const [recommendations, setRecommendations] = useState([]);
   const [selected, setSelected] = useState({});
   const [stage, setStage] = useState("idle");
   const [message, setMessage] = useState("");
   const [order, setOrder] = useState(null);
+  const [authorizationState, establishAuthorization, authorizationPending] = useActionState(
+    provisionBuyerSpendingAuthorization,
+    { success: false, message: "", authorization: null }
+  );
+
+  const activeAuthorization = authorizationState.authorization ?? authorization;
 
   async function recommend(event) {
     event.preventDefault();
@@ -27,6 +34,7 @@ export function BuyerShell({ signedIn, products }) {
   }
 
   async function propose() {
+    setOrder(null);
     const items = Object.entries(selected).filter(([, quantity]) => quantity > 0).map(([product_id, quantity]) => ({ product_id, quantity: Number(quantity) }));
     if (!items.length) { setMessage("Select at least one item before continuing."); return; }
     setStage("proposing"); setMessage("");
@@ -42,13 +50,30 @@ export function BuyerShell({ signedIn, products }) {
 
   return <div className="mx-auto min-h-screen max-w-6xl px-5 py-8 sm:px-8 sm:py-12">
     <header className="flex items-center justify-between"><div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--accent)]">Buyer side</p><h1 className="mt-2 text-3xl font-semibold tracking-tight sm:text-5xl">What are you looking for?</h1></div><Link href="/dashboard" className="text-sm font-medium text-[var(--muted)] hover:text-[var(--foreground)]">Merchant workspace</Link></header>
+    <section className="mt-8 rounded-2xl border bg-[var(--surface)] p-5 sm:flex sm:items-end sm:justify-between sm:gap-6 sm:p-6">
+      <div className="max-w-xl">
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--accent)]">AI spending limit</p>
+        <h2 className="mt-2 text-xl font-semibold">Choose what the AI agent may spend</h2>
+        <p className="mt-2 text-sm leading-6 text-[var(--muted)]">The AI agent cannot purchase above this authorized amount. You can set or increase your own delegation at any time.</p>
+        {activeAuthorization ? <p className="mt-3 text-sm font-medium text-[var(--accent-dark)]">Current authorization: {formatMoney(activeAuthorization.max_amount_minor, activeAuthorization.currency)}</p> : null}
+      </div>
+      <form action={establishAuthorization} className="mt-5 flex flex-wrap items-end gap-3 sm:mt-0">
+        <input type="hidden" name="currency" value="INR" />
+        <div>
+          <label htmlFor="buyer-authorization-amount" className="mb-2 block text-xs font-medium text-[var(--foreground)]">Maximum amount (INR)</label>
+          <input id="buyer-authorization-amount" name="amount" type="number" min="0.01" step="0.01" required defaultValue={activeAuthorization?.currency === "INR" ? (activeAuthorization.max_amount_minor / 100).toFixed(2) : ""} className="h-11 w-44 rounded-xl border bg-white px-3 text-sm outline-none focus:border-[var(--accent)]" />
+        </div>
+        <button type="submit" disabled={authorizationPending} className="h-11 rounded-xl bg-[var(--accent)] px-4 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">{authorizationPending ? "Saving..." : "Set spending limit"}</button>
+      </form>
+      {authorizationState.message ? <p className={`mt-3 w-full text-sm sm:col-span-2 ${authorizationState.success ? "text-[var(--accent-dark)]" : "text-red-700"}`} role="status">{authorizationState.message}</p> : null}
+    </section>
     <div className="mt-10 grid gap-8 lg:grid-cols-[1fr_0.9fr]">
       <section className="rounded-3xl border bg-[var(--surface)] p-6 shadow-[0_20px_60px_rgba(23,33,31,0.06)] sm:p-8">
         <form onSubmit={recommend}><label htmlFor="intent" className="text-sm font-semibold">Describe your need</label><textarea id="intent" value={intent} onChange={(event) => setIntent(event.target.value)} required maxLength={1000} rows={5} placeholder="For example: I need a thoughtful desk setup under a modest budget" className="mt-3 w-full resize-none rounded-2xl border bg-[var(--surface-muted)] p-4 text-sm outline-none focus:border-[var(--accent)]" /><button disabled={stage === "thinking" || stage === "proposing"} className="mt-4 rounded-xl bg-[var(--accent)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{stage === "thinking" ? "Thinking..." : "Find a good match"}</button></form>
         {message ? <p role="alert" className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{message}</p> : null}
         {recommendations.length ? <div className="mt-10"><div className="flex items-end justify-between"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--accent)]">AI shortlist</p><h2 className="mt-1 text-xl font-semibold">Review the recommendation</h2></div><span className="text-xs text-[var(--muted)]">You stay in control</span></div><div className="mt-5 space-y-3">{recommendations.map((item) => <article key={item.product_id} className="rounded-2xl border p-4"><div className="flex gap-4"><div className="min-w-0 flex-1"><h3 className="font-semibold">{item.name}</h3><p className="mt-1 text-sm leading-5 text-[var(--muted)]">{item.reason}</p><p className="mt-2 text-sm font-medium">{formatMoney(item.price_minor, item.currency)} each</p></div><input aria-label={`Quantity for ${item.name}`} type="number" min="0" max="1000" value={selected[item.product_id] ?? 0} onChange={(event) => setSelected({ ...selected, [item.product_id]: event.target.value })} className="h-10 w-20 rounded-lg border px-2 text-center text-sm" /></div></article>)}</div><button type="button" onClick={propose} disabled={stage === "proposing"} className="mt-5 w-full rounded-xl border-2 border-[var(--accent)] px-5 py-3 text-sm font-semibold text-[var(--accent-dark)] disabled:opacity-50">{stage === "proposing" ? "Checking purchase..." : "Review purchase"}</button></div> : null}
       </section>
-      <aside className="rounded-3xl border border-[var(--accent)] bg-[var(--accent-dark)] p-6 text-white sm:p-8"><p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#a9e1cc]">Bounded commerce</p><h2 className="mt-4 text-2xl font-semibold">A clear handoff from intent to payment.</h2><div className="mt-8 space-y-5 text-sm leading-6 text-[#d9eee6]"><p>AI suggests from the active merchant catalog. It never sets prices or creates a payment.</p><p>Every total is recalculated on the server, checked against the merchant limit, and shown before authorization.</p><p>Razorpay opens only after you explicitly authorize the confirmed purchase.</p></div>{order ? <div className="mt-8 border-t border-white/20 pt-6"><p className="text-xs uppercase tracking-[0.14em] text-[#a9e1cc]">Confirmed order</p><p className="mt-2 text-2xl font-semibold">{formatMoney(order.total_minor, order.currency)}</p><p className="mt-1 text-sm text-[#d9eee6]">Order is pending payment.</p><RazorpayCheckout orderId={order.id} amountMinor={order.total_minor} currency={order.currency} /></div> : null}</aside>
+      <aside className="rounded-3xl border border-[var(--accent)] bg-[var(--accent-dark)] p-6 text-white sm:p-8"><p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#a9e1cc]">Bounded commerce</p><h2 className="mt-4 text-2xl font-semibold">A clear handoff from intent to payment.</h2><div className="mt-8 space-y-5 text-sm leading-6 text-[#d9eee6]"><p>AI suggests from the active merchant catalog. It never sets prices or creates a payment.</p><p>Every total is recalculated on the server and checked against your AI spending authorization before authorization.</p><p>Razorpay opens only after you explicitly authorize the confirmed purchase.</p></div>{order ? <div className="mt-8 border-t border-white/20 pt-6"><p className="text-xs uppercase tracking-[0.14em] text-[#a9e1cc]">Confirmed order</p><p className="mt-2 text-2xl font-semibold">{formatMoney(order.total_minor, order.currency)}</p><p className="mt-1 text-sm text-[#d9eee6]">{order.status === "paid" ? "Order is paid." : "Order is pending payment."}</p><RazorpayCheckout orderId={order.id} amountMinor={order.total_minor} currency={order.currency} /></div> : <div className="mt-8 border-t border-white/20 pt-6"><p className="text-sm font-medium text-white">No purchase is confirmed yet.</p><p className="mt-1 text-sm leading-6 text-[#d9eee6]">Review a server-approved proposal before opening payment.</p></div>}</aside>
     </div>
   </div>;
 }
