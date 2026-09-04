@@ -5,7 +5,12 @@ import { writeAgentAudit } from "@/lib/agent-audit";
 export const runtime = "nodejs";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function errorResponse(message, status) { return Response.json({ success: false, message }, { status }); }
+function errorResponse(message, status, code) {
+  return Response.json(
+    { success: false, ...(code ? { code } : {}), message },
+    { status }
+  );
+}
 
 function getIdempotencyKey(items) {
   const canonicalItems = [...items]
@@ -50,6 +55,58 @@ export async function POST(request) {
   if (currencies.size !== 1) return errorResponse("Selected products must use one currency.", 409);
   const totalMinor = items.reduce((total, item) => total + Number(productsById.get(item.product_id).price_minor) * item.quantity, 0);
   if (!Number.isSafeInteger(totalMinor) || totalMinor <= 0) return errorResponse("The proposed total is outside the supported amount range.", 409);
+
+  const { data: buyerAuthorization, error: authorizationError } = await supabase
+    .from("buyer_spending_authorizations")
+    .select("max_amount_minor, currency")
+    .eq("user_id", user.id)
+    .maybeSingle();
+  if (authorizationError) return errorResponse("We could not verify your buyer spending authorization.", 500);
+  if (!buyerAuthorization) {
+    return errorResponse(
+      "Establish a buyer spending authorization before the AI can purchase.",
+      403,
+      "buyer_authorization_required"
+    );
+  }
+
+  const orderCurrency = [...currencies][0];
+  if (buyerAuthorization.currency !== orderCurrency) {
+    return errorResponse(
+      "Your buyer spending authorization uses a different currency from this purchase.",
+      422,
+      "authorization_currency_mismatch"
+    );
+  }
+
+  const authorizationLimitMinor = Number(buyerAuthorization.max_amount_minor);
+  if (!Number.isSafeInteger(authorizationLimitMinor) || authorizationLimitMinor <= 0) {
+    return errorResponse("Your buyer spending authorization is invalid.", 409);
+  }
+
+  if (totalMinor > authorizationLimitMinor) {
+    try {
+      await writeAgentAudit({
+        merchantId,
+        eventType: "limit_exceeded",
+        actor: "ai_buyer",
+        payload: {
+          total_minor: totalMinor,
+          authorization_limit_minor: authorizationLimitMinor,
+          currency: orderCurrency,
+          reason: "buyer_spending_authorization_exceeded",
+        },
+        result: "blocked",
+      });
+    } catch {
+      return errorResponse("The buyer spending limit could not be recorded. No order was created.", 500);
+    }
+    return errorResponse(
+      "This purchase exceeds your authorized buyer spending limit. Reduce the quantity or choose fewer items, then try again.",
+      422,
+      "buyer_spending_limit_exceeded"
+    );
+  }
 
   const { data: merchant, error: merchantError } = await supabase.from("merchants").select("transaction_limit_minor, currency").eq("id", merchantId).single();
   if (merchantError || !merchant) return errorResponse("We could not load the merchant purchase limit.", 500);
