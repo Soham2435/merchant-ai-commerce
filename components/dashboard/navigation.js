@@ -8,7 +8,8 @@ const navigation = [
   { label: "Products", href: "/dashboard/products" },
   { label: "Orders", href: "/dashboard/orders" },
   { label: "Customers", href: "/dashboard/customers" },
-  { label: "AI Insights", href: "/dashboard/ai-insights" },
+  { label: "AI Activity", href: "/dashboard/ai-insights" },
+  { label: "Buyer Demo", href: "/buyer" },
   { label: "Settings", href: "/dashboard/settings" },
 ];
 
