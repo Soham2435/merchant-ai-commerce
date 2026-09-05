@@ -85,7 +85,8 @@ export async function POST(request) {
     if (/only pending orders can be approved/i.test(errorMsg)) {
       return errorResponse(
         "Only pending orders can be approved.",
-        409
+        409,
+        "order_not_pending"
       );
     }
     if (/buyer spending authorization/i.test(errorMsg)) {

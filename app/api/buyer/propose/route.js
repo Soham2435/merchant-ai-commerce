@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createClient } from "@/lib/supabase/server";
 import { writeAgentAudit } from "@/lib/agent-audit";
 
@@ -14,7 +14,7 @@ function errorResponse(message, status, code) {
   );
 }
 
-function getIdempotencyKey(items, buyerUserId) {
+function getIdempotencyKey(items, buyerUserId, proposalSessionId) {
   const canonicalItems = [...items]
     .sort((left, right) =>
       left.product_id.localeCompare(right.product_id)
@@ -22,7 +22,7 @@ function getIdempotencyKey(items, buyerUserId) {
     .map((item) => `${item.product_id}:${item.quantity}`)
     .join(",");
 
-  const canonicalRequest = `buyer-v2:${buyerUserId}:${canonicalItems}`;
+  const canonicalRequest = `buyer-v3:${proposalSessionId}:${buyerUserId}:${canonicalItems}`;
 
   return createHash("sha256")
     .update(canonicalRequest)
@@ -46,6 +46,22 @@ export async function POST(request) {
     body = await request.json();
   } catch {
     return errorResponse("Request body must be valid JSON.", 400);
+  }
+
+  let proposalSessionId =
+    typeof body?.proposal_session_id === "string"
+      ? body.proposal_session_id.trim()
+      : null;
+
+  if (proposalSessionId && !UUID_PATTERN.test(proposalSessionId)) {
+    return errorResponse(
+      "The proposal_session_id must be a valid UUID.",
+      400
+    );
+  }
+
+  if (!proposalSessionId) {
+    proposalSessionId = randomUUID();
   }
 
   const requestedItems = body?.items;
@@ -337,7 +353,8 @@ export async function POST(request) {
         p_merchant_id: merchantId,
         p_idempotency_key: getIdempotencyKey(
           items,
-          user.id
+          user.id,
+          proposalSessionId
         ),
         p_items: items,
         p_is_buyer: true,
@@ -359,6 +376,27 @@ export async function POST(request) {
   const order = Array.isArray(orderRows)
     ? orderRows[0]
     : orderRows;
+
+  const { data: orderRecord, error: orderLookupError } = await supabase
+    .from("orders")
+    .select("id, status, approved_at, total_minor, currency, subtotal_minor")
+    .eq("id", order.order_id)
+    .single();
+
+  if (orderLookupError || !orderRecord) {
+    return errorResponse(
+      "The order could not be validated after preparation.",
+      500
+    );
+  }
+
+  if (orderRecord.status !== "pending" || orderRecord.approved_at !== null) {
+    return errorResponse(
+      "This proposal resolved to a non-pending order. Please start a new search.",
+      409,
+      "order_not_pending"
+    );
+  }
 
   try {
     await writeAgentAudit({

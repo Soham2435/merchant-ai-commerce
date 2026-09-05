@@ -241,16 +241,25 @@ ${JSON.stringify(catalog)}`,
       recommendations,
     });
   } catch (error) {
-    console.error("Buyer recommendation failed", {
-      message:
-        error instanceof Error
-          ? error.message
-          : "Unknown recommendation error",
+    console.error("AI Recommendation Error:", error);
+    await writeAgentAudit({
+      merchantId,
+      eventType: "ai_recommendation",
+      actor: "ai_buyer",
+      payload: { buyer_text: buyerText },
+      result: "error",
     });
-
-    return errorResponse(
-      "The buyer assistant could not make a recommendation. Please try again.",
-      502
-    );
+    const isRateLimited =
+      error?.status === 429 ||
+      (typeof error?.message === "string" &&
+        (error.message.includes("429") || error.message.includes("RESOURCE_EXHAUSTED")));
+    if (isRateLimited) {
+      return errorResponse(
+        "AI recommendation temporarily unavailable. Please try again in a moment.",
+        429,
+        "ai_rate_limited"
+      );
+    }
+    return errorResponse("An unexpected error occurred.", 500);
   }
 }
