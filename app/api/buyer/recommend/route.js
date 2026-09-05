@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { writeAgentAudit } from "@/lib/agent-audit";
+import { GoogleGenAI } from "@google/genai";
 
 
 export const runtime = "nodejs";
@@ -97,7 +98,7 @@ export async function POST(request) {
   const { data: products, error: productsError } = await supabase
     .from("products")
     .select(
-      "id, name, description, category, price_minor, currency, merchant_id"
+      "id, name, description, price_minor, currency, merchant_id"
     )
     .eq("merchant_id", merchantId)
     .eq("is_active", true)
@@ -128,13 +129,12 @@ export async function POST(request) {
   }
 
   const catalog = products.map((product) => ({
-    id: product.id,
-    name: product.name,
-    description: product.description,
-    category: product.category,
-    price_minor: Number(product.price_minor),
-    currency: product.currency,
-  }));
+  id: product.id,
+  name: product.name,
+  description: product.description,
+  price_minor: Number(product.price_minor),
+  currency: product.currency,
+}));
 
   try {
     const ai = new GoogleGenAI({ apiKey });
