@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { createClient } from "@/lib/supabase/server";
 import { writeAgentAudit } from "@/lib/agent-audit";
+import { supabaseAdmin } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
 
@@ -197,42 +198,18 @@ export async function POST(request) {
     return jsonError("Payment verification failed.", 400);
   }
 
-  const { data: memberships, error: membershipError } = await supabase
-    .from("merchant_members")
-    .select("merchant_id")
-    .eq("user_id", user.id);
-
-  if (membershipError) {
-    console.error("Razorpay payment membership lookup failed", {
-      event: "razorpay_payment_verification",
-      result: "error",
-      reason: membershipError.code ?? "membership_lookup_failed",
-    });
-    return jsonError("We could not verify your merchant workspace.", 500);
-  }
-
-  if (!memberships || memberships.length !== 1) {
-    return jsonError(
-      "Razorpay payment verification requires exactly one merchant workspace.",
-      403
-    );
-  }
-
-  const merchantId = memberships[0].merchant_id;
   const { data: order, error: orderError } = await supabase
     .from("orders")
     .select(
-      "id, merchant_id, status, total_minor, currency, razorpay_order_id, razorpay_payment_id"
+      "id, merchant_id, buyer_user_id, status, total_minor, currency, razorpay_order_id, razorpay_payment_id"
     )
     .eq("id", orderId)
-    .eq("merchant_id", merchantId)
     .maybeSingle();
 
   if (orderError) {
     console.error("Razorpay payment order lookup failed", {
       event: "razorpay_payment_verification",
       supabaseOrderId: orderId,
-      merchantId,
       result: "error",
       reason: orderError.code ?? "order_lookup_failed",
     });
@@ -242,6 +219,38 @@ export async function POST(request) {
   if (!order) {
     return jsonError("Order not found.", 404);
   }
+
+  const isBuyer = order.buyer_user_id === user.id;
+  let isMerchantMember = false;
+
+  if (!isBuyer) {
+    const { data: membership, error: membershipError } = await supabase
+      .from("merchant_members")
+      .select("merchant_id")
+      .eq("user_id", user.id)
+      .eq("merchant_id", order.merchant_id)
+      .maybeSingle();
+
+    if (membershipError) {
+      console.error("Razorpay payment membership lookup failed", {
+        event: "razorpay_payment_verification",
+        result: "error",
+        reason: membershipError.code ?? "membership_lookup_failed",
+      });
+      return jsonError("We could not verify your merchant workspace.", 500);
+    }
+
+    isMerchantMember = Boolean(membership);
+  }
+
+  if (!isBuyer && !isMerchantMember) {
+    return jsonError(
+      "You are not authorized to verify payment for this order.",
+      403
+    );
+  }
+
+  const merchantId = order.merchant_id;
 
   if (order.razorpay_order_id !== razorpayOrderId) {
     logPaymentEvent({
@@ -363,7 +372,7 @@ export async function POST(request) {
     );
   }
 
-  const { data: updatedOrder, error: updateError } = await supabase
+  let updateQuery = supabaseAdmin
     .from("orders")
     .update({
       status: "paid",
@@ -372,7 +381,13 @@ export async function POST(request) {
     .eq("id", order.id)
     .eq("merchant_id", merchantId)
     .eq("status", "pending")
-    .eq("razorpay_order_id", order.razorpay_order_id)
+    .eq("razorpay_order_id", order.razorpay_order_id);
+
+  if (isBuyer) {
+    updateQuery = updateQuery.eq("buyer_user_id", user.id);
+  }
+
+  const { data: updatedOrder, error: updateError } = await updateQuery
     .select(
       "id, status, total_minor, currency, razorpay_order_id, razorpay_payment_id"
     )
@@ -406,14 +421,20 @@ export async function POST(request) {
     return paymentSuccess(updatedOrder, merchantId);
   }
 
-  const { data: reconciledOrder, error: reconcileError } = await supabase
+  let reconQuery = supabaseAdmin
     .from("orders")
     .select(
       "id, status, total_minor, currency, razorpay_order_id, razorpay_payment_id"
     )
     .eq("id", order.id)
-    .eq("merchant_id", merchantId)
-    .maybeSingle();
+    .eq("merchant_id", merchantId);
+
+  if (isBuyer) {
+    reconQuery = reconQuery.eq("buyer_user_id", user.id);
+  }
+
+  const { data: reconciledOrder, error: reconcileError } =
+    await reconQuery.maybeSingle();
 
   if (
     !reconcileError &&

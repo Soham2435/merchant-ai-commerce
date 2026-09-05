@@ -36,22 +36,28 @@ export async function proxy(request) {
   } = await supabase.auth.getUser();
 
   const isDashboardRoute = request.nextUrl.pathname.startsWith("/dashboard");
-  const isLoginRoute = request.nextUrl.pathname.startsWith("/login");
+const isMerchantLoginRoute = request.nextUrl.pathname.startsWith("/login");
+const isBuyerLoginRoute = request.nextUrl.pathname.startsWith("/buyer/login");
 
   if (isDashboardRoute && !user) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
 
-  if (isLoginRoute && user) {
-    return NextResponse.redirect(new URL("/dashboard", request.url));
-  }
+  if (isMerchantLoginRoute && user) {
+  return NextResponse.redirect(new URL("/dashboard", request.url));
+}
+
+if (isBuyerLoginRoute && user) {
+  return NextResponse.redirect(new URL("/buyer", request.url));
+}
 
   return response;
 }
 
 export const config = {
   matcher: [
-    "/dashboard/:path*",
-    "/login",
-  ],
+  "/dashboard/:path*",
+  "/login",
+  "/buyer/login",
+],
 };

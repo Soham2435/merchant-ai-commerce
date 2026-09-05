@@ -48,6 +48,31 @@ export function BuyerShell({
   const activeAuthorization =
     authorizationState.authorization ?? authorization;
 
+  function updateQuantity(productId, nextQuantity) {
+    const qty = Math.max(0, Math.min(1000, Number(nextQuantity) || 0));
+    setSelected((prev) => {
+      const updated = { ...prev };
+      if (qty === 0) {
+        delete updated[productId];
+      } else {
+        updated[productId] = qty;
+      }
+      return updated;
+    });
+  }
+
+  function toggleBundleItem(productId, defaultQuantity = 1) {
+    setSelected((prev) => {
+      const updated = { ...prev };
+      if (updated[productId] && Number(updated[productId]) > 0) {
+        delete updated[productId];
+      } else {
+        updated[productId] = defaultQuantity;
+      }
+      return updated;
+    });
+  }
+
   async function recommend(event) {
     event.preventDefault();
 
@@ -74,7 +99,14 @@ export function BuyerShell({
       }
 
       setRecommendations(body.recommendations);
-      setSelected({});
+      const initialSelected = {};
+      const topPrimary = (body.recommendations ?? []).find(
+        (item) => item.recommendation_type !== "cross_sell"
+      );
+      if (topPrimary) {
+        initialSelected[topPrimary.product_id] = 1;
+      }
+      setSelected(initialSelected);
       setStage("recommendations");
     } catch (error) {
       setStage("idle");
@@ -135,6 +167,7 @@ export function BuyerShell({
           name: rec?.name ?? "Product",
           price_minor: rec?.price_minor ?? 0,
           currency: rec?.currency ?? body.order.currency,
+          recommendation_type: rec?.recommendation_type ?? "primary",
         };
       });
 
@@ -260,13 +293,49 @@ export function BuyerShell({
   }
 
   const resumablePendingOrder = pendingOrders.find(
-  (candidate) => candidate.status === "pending"
-);
+    (candidate) => candidate.status === "pending"
+  );
 
-const hasPendingCheckout =
-  Boolean(resumablePendingOrder) &&
-  !pendingCheckoutDismissed &&
-  order?.status !== "paid";
+  const hasPendingCheckout =
+    Boolean(resumablePendingOrder) &&
+    !pendingCheckoutDismissed &&
+    order?.status !== "paid";
+
+  const primaryRecommendations = recommendations.filter(
+    (item) => item.recommendation_type !== "cross_sell"
+  );
+  const crossSellRecommendations = recommendations.filter(
+    (item) => item.recommendation_type === "cross_sell"
+  );
+  const effectivePrimary =
+    primaryRecommendations.length > 0
+      ? primaryRecommendations
+      : recommendations;
+  const effectiveCrossSell =
+    primaryRecommendations.length > 0 ? crossSellRecommendations : [];
+
+  const selectedCount = Object.values(selected).reduce(
+    (sum, qty) => sum + (Number(qty) > 0 ? 1 : 0),
+    0
+  );
+
+  const selectedTotalMinor = recommendations.reduce((sum, rec) => {
+    const qty = Number(selected[rec.product_id] || 0);
+    return sum + (qty > 0 ? rec.price_minor * qty : 0);
+  }, 0);
+
+  const hasCrossSellSelected = effectiveCrossSell.some(
+    (cs) => Number(selected[cs.product_id] || 0) > 0
+  );
+
+  const authorizationLimitMinor = activeAuthorization
+    ? Number(activeAuthorization.max_amount_minor)
+    : null;
+
+  const isOverSpendingLimit =
+    authorizationLimitMinor !== null &&
+    selectedTotalMinor > authorizationLimitMinor;
+
   return (
     <div className="mx-auto min-h-screen max-w-6xl px-5 py-8 sm:px-8 sm:py-12">
       <header className="flex items-center justify-between gap-4">
@@ -467,73 +536,256 @@ const hasPendingCheckout =
           ) : null}
 
           {recommendations.length ? (
-            <div className="mt-10">
-              <div className="flex items-end justify-between">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--accent)]">
-                    AI shortlist
-                  </p>
-
-                  <h2 className="mt-1 text-xl font-semibold">
-                    Review the recommendation
-                  </h2>
+            <div className="mt-10 space-y-6">
+              <div>
+                <div className="flex items-end justify-between">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--accent)]">
+                      AI shortlist
+                    </p>
+                    <h2 className="mt-1 text-xl font-semibold">
+                      Primary recommendations
+                    </h2>
+                  </div>
+                  <span className="text-xs text-[var(--muted)]">
+                    Direct match for your request
+                  </span>
                 </div>
 
-                <span className="text-xs text-[var(--muted)]">
-                  You stay in control
-                </span>
+                <div className="mt-4 space-y-3">
+                  {effectivePrimary.map((item) => {
+                    const currentQty = Number(selected[item.product_id] ?? 0);
+                    return (
+                      <article
+                        key={item.product_id}
+                        className={`rounded-2xl border p-4 transition-all ${
+                          currentQty > 0
+                            ? "border-[var(--accent)]/40 bg-[var(--surface)] shadow-sm"
+                            : "border-black/10 bg-[var(--surface-muted)]/40 opacity-75"
+                        }`}
+                      >
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-[10px] font-semibold text-[var(--accent-dark)]">
+                                Primary match
+                              </span>
+                              <h3 className="font-semibold text-[var(--foreground)]">
+                                {item.name}
+                              </h3>
+                            </div>
+
+                            <p className="mt-1.5 text-sm leading-5 text-[var(--muted)]">
+                              {item.reason}
+                            </p>
+
+                            <p className="mt-2 text-sm font-semibold text-[var(--foreground)]">
+                              {formatMoney(item.price_minor, item.currency)}
+                              <span className="text-xs font-normal text-[var(--muted)]">
+                                {" "}each
+                              </span>
+                            </p>
+                          </div>
+
+                          <div className="flex items-center gap-2 self-end sm:self-center">
+                            <label
+                              htmlFor={`qty-${item.product_id}`}
+                              className="text-xs text-[var(--muted)]"
+                            >
+                              Qty:
+                            </label>
+                            <div className="flex items-center rounded-lg border bg-white">
+                              <button
+                                type="button"
+                                aria-label={`Decrease quantity for ${item.name}`}
+                                onClick={() =>
+                                  updateQuantity(
+                                    item.product_id,
+                                    Math.max(0, currentQty - 1)
+                                  )
+                                }
+                                className="h-9 w-8 text-sm font-semibold text-[var(--muted)] hover:text-[var(--foreground)]"
+                              >
+                                −
+                              </button>
+                              <input
+                                id={`qty-${item.product_id}`}
+                                aria-label={`Quantity for ${item.name}`}
+                                type="number"
+                                min="0"
+                                max="1000"
+                                value={currentQty}
+                                onChange={(event) =>
+                                  updateQuantity(
+                                    item.product_id,
+                                    event.target.value
+                                  )
+                                }
+                                className="h-9 w-12 border-x text-center text-sm outline-none"
+                              />
+                              <button
+                                type="button"
+                                aria-label={`Increase quantity for ${item.name}`}
+                                onClick={() =>
+                                  updateQuantity(
+                                    item.product_id,
+                                    currentQty + 1
+                                  )
+                                }
+                                className="h-9 w-8 text-sm font-semibold text-[var(--muted)] hover:text-[var(--foreground)]"
+                              >
+                                +
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
               </div>
 
-              <div className="mt-5 space-y-3">
-                {recommendations.map((item) => (
-                  <article
-                    key={item.product_id}
-                    className="rounded-2xl border p-4"
-                  >
-                    <div className="flex gap-4">
-                      <div className="min-w-0 flex-1">
-                        <h3 className="font-semibold">{item.name}</h3>
-
-                        <p className="mt-1 text-sm leading-5 text-[var(--muted)]">
-                          {item.reason}
-                        </p>
-
-                        <p className="mt-2 text-sm font-medium">
-                          {formatMoney(
-                            item.price_minor,
-                            item.currency
-                          )}{" "}
-                          each
-                        </p>
-                      </div>
-
-                      <input
-                        aria-label={`Quantity for ${item.name}`}
-                        type="number"
-                        min="0"
-                        max="1000"
-                        value={selected[item.product_id] ?? 0}
-                        onChange={(event) =>
-                          setSelected({
-                            ...selected,
-                            [item.product_id]: event.target.value,
-                          })
-                        }
-                        className="h-10 w-20 rounded-lg border px-2 text-center text-sm"
-                      />
+              {effectiveCrossSell.length ? (
+                <div className="rounded-2xl border border-emerald-300/70 bg-emerald-50/40 p-4 sm:p-5">
+                  <div className="flex items-end justify-between">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-800">
+                        Complementary add-on
+                      </p>
+                      <h3 className="mt-1 text-lg font-semibold text-emerald-950">
+                        Recommended add-ons
+                      </h3>
                     </div>
-                  </article>
-                ))}
+                    <span className="rounded-full bg-emerald-200/80 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">
+                      AI upsell recommendation
+                    </span>
+                  </div>
+
+                  <p className="mt-1 text-xs text-emerald-800/80">
+                    Pairing suggested by the assistant to increase value for your setup.
+                  </p>
+
+                  <div className="mt-4 space-y-3">
+                    {effectiveCrossSell.map((item) => {
+                      const inBundle = Number(selected[item.product_id] ?? 0) > 0;
+                      return (
+                        <article
+                          key={item.product_id}
+                          className="rounded-xl border border-emerald-200/80 bg-white p-4 shadow-sm"
+                        >
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2">
+                                <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">
+                                  Add-on
+                                </span>
+                                <h4 className="font-semibold text-gray-900">
+                                  {item.name}
+                                </h4>
+                              </div>
+
+                              <p className="mt-1.5 text-xs leading-5 text-gray-700">
+                                <span className="font-medium text-emerald-900">
+                                  Why add this:
+                                </span>{" "}
+                                {item.reason}
+                              </p>
+
+                              <p className="mt-2 text-sm font-semibold text-gray-900">
+                                {formatMoney(item.price_minor, item.currency)}
+                              </p>
+                            </div>
+
+                            <div className="flex items-center gap-2 self-end sm:self-center">
+                              {inBundle ? (
+                                <button
+                                  type="button"
+                                  onClick={() => toggleBundleItem(item.product_id)}
+                                  className="rounded-xl bg-emerald-700 px-3.5 py-2 text-xs font-semibold text-white shadow-sm hover:bg-emerald-800"
+                                >
+                                  ✓ In bundle (Remove)
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => toggleBundleItem(item.product_id, 1)}
+                                  className="rounded-xl border border-emerald-700 bg-emerald-50 px-3.5 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-100"
+                                >
+                                  + Add to bundle
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="rounded-2xl border bg-[var(--surface-muted)] p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--accent)]">
+                      Selection summary
+                    </p>
+                    <p className="mt-0.5 text-sm font-medium text-[var(--foreground)]">
+                      {selectedCount === 0
+                        ? "No items selected"
+                        : `${selectedCount} item${selectedCount > 1 ? "s" : ""}${
+                            hasCrossSellSelected
+                              ? " • Includes recommended add-on"
+                              : ""
+                          }`}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xs text-[var(--muted)]">Estimated total</p>
+                    <p className="text-lg font-semibold text-[var(--foreground)]">
+                      {formatMoney(
+                        selectedTotalMinor,
+                        recommendations[0]?.currency ?? "INR"
+                      )}
+                    </p>
+                  </div>
+                </div>
+
+                {activeAuthorization ? (
+                  <div className="mt-3 flex items-center justify-between border-t border-black/5 pt-2 text-xs">
+                    <span className="text-[var(--muted)]">
+                      AI spending limit:
+                    </span>
+                    <span
+                      className={`font-medium ${
+                        isOverSpendingLimit
+                          ? "font-semibold text-red-700"
+                          : "text-[var(--accent-dark)]"
+                      }`}
+                    >
+                      {isOverSpendingLimit
+                        ? `Exceeds limit of ${formatMoney(
+                            activeAuthorization.max_amount_minor,
+                            activeAuthorization.currency
+                          )}`
+                        : `Within limit (${formatMoney(
+                            activeAuthorization.max_amount_minor,
+                            activeAuthorization.currency
+                          )})`}
+                    </span>
+                  </div>
+                ) : null}
               </div>
 
               <button
                 type="button"
                 onClick={propose}
-                disabled={stage === "proposing"}
-                className="mt-5 w-full rounded-xl border-2 border-[var(--accent)] px-5 py-3 text-sm font-semibold text-[var(--accent-dark)] disabled:opacity-50"
+                disabled={stage === "proposing" || selectedCount === 0}
+                className="mt-2 w-full rounded-xl border-2 border-[var(--accent)] bg-[var(--accent)] px-5 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-95 disabled:opacity-50"
               >
                 {stage === "proposing"
                   ? "Checking purchase..."
+                  : hasCrossSellSelected
+                  ? "Review bundle purchase"
                   : "Review purchase"}
               </button>
             </div>
@@ -625,9 +877,16 @@ const hasPendingCheckout =
                         key={item.product_id}
                         className="flex items-center justify-between gap-2"
                       >
-                        <span className="truncate font-medium text-white">
-                          {item.name} × {item.quantity}
-                        </span>
+                        <div className="min-w-0">
+                          <span className="truncate font-medium text-white flex items-center gap-1.5">
+                            {item.name} × {item.quantity}
+                          </span>
+                          {item.recommendation_type === "cross_sell" ? (
+                            <span className="inline-block mt-0.5 rounded bg-emerald-400/20 px-1.5 py-0.5 text-[10px] font-semibold text-[#a9e1cc]">
+                              Bundled add-on
+                            </span>
+                          ) : null}
+                        </div>
 
                         <span className="shrink-0 text-[#d9eee6]">
                           {formatMoney(

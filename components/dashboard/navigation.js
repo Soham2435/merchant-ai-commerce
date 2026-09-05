@@ -9,7 +9,6 @@ const navigation = [
   { label: "Orders", href: "/dashboard/orders" },
   { label: "Customers", href: "/dashboard/customers" },
   { label: "AI Activity", href: "/dashboard/ai-insights" },
-  { label: "Buyer Demo", href: "/buyer" },
   { label: "Settings", href: "/dashboard/settings" },
 ];
 
