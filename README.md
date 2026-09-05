@@ -33,51 +33,19 @@ Merchant AI Commerce enforces a strict architectural boundary:
 
 ---
 
-## Demo Flow
+## End-to-End Demo Flow
 
-```
-[ Merchant Flow ]
-Catalog
-  -> AI Growth Opportunity Analysis (Gemini)
-  -> Merchant Review & Explicit Approval
-  -> Active Merchant Growth Rule Persisted in Database
+The complete demonstration follows the merchant growth journey, conversational buyer journey, successful Razorpay transaction, and a deliberately triggered spending-limit failure.
 
-[ Buyer Flow ]
-Natural-Language Buyer Intent
-  -> AI Primary Product Recommendation (Gemini)
-  -> Deterministic Cross-Sell Lookup (from Active Merchant Growth Rules)
-  -> Explicit Buyer Review & Proposal Approval
-  -> Server-Side Product, Merchant & Spending Authorization Validation
-  -> Bounded Pending Order Creation
-  -> Razorpay Checkout (Test Mode)
-  -> Server-Side HMAC-SHA256 Payment Signature Verification
-  -> Paid Order Persisted & Audit Trail Recorded
-```
+![Merchant AI Commerce End-to-End Demo Flow](docs/images/demo-flow.png)
 
 ---
 
 ## Architecture
 
-```mermaid
-flowchart TD
-    M[Merchant] --> G[AI Growth Opportunity Engine]
-    G --> A[Merchant Review & Approval]
-    A --> R[Active Growth Rule in DB]
+The system separates probabilistic AI reasoning from deterministic commerce execution. Gemini recommends; merchant and buyer approvals gate actions; the server validates and controls every financial operation.
 
-    B[Buyer] --> I[Conversational Intent]
-    I --> P[Gemini Primary Recommendation]
-    R --> C[Deterministic Cross-Sell Insertion]
-    P --> C
-    C --> BA[Explicit Buyer Approval]
-
-    BA --> S[Server-Side Catalog & Merchant Validation]
-    S --> L[Buyer Spending Authorization Guardrail]
-    L --> O[Pending Order in Supabase]
-    O --> RP[Razorpay Test Mode Checkout]
-    RP --> V[Server-Side HMAC-SHA256 Verification]
-    V --> DB[Orders & Order Items Table]
-    DB --> AU[Agent Audit Events Trail]
-```
+![Merchant AI Commerce Architecture](docs/images/architecture.png)
 
 ---
 
