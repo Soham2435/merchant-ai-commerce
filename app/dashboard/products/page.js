@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { CreateProductForm } from "./create-product-form";
+import { ProductList } from "./product-list";
 
 export default async function ProductsPage() {
   const supabase = await createClient();
@@ -96,41 +97,7 @@ export default async function ProductsPage() {
           description="No products have been added to this merchant workspace yet."
           label="0 products"
         />
-      ) : (
-        <section className="overflow-hidden rounded-2xl border bg-[var(--surface)]">
-          <div className="border-b px-6 py-5">
-            <p className="text-sm font-medium text-[var(--muted)]">
-              {products.length} product{products.length === 1 ? "" : "s"}
-            </p>
-          </div>
-
-          <div className="divide-y">
-            {products.map((product) => (
-              <article
-                key={product.id}
-                className="flex flex-col gap-3 px-6 py-5 sm:flex-row sm:items-center sm:justify-between"
-              >
-                <div>
-                  <h2 className="font-semibold text-[var(--foreground)]">
-                    {product.name}
-                  </h2>
-
-                  <div className="mt-1 flex flex-wrap gap-2 text-xs text-[var(--muted)]">
-                    {product.sku ? <span>SKU: {product.sku}</span> : null}
-                    {product.category ? <span>{product.category}</span> : null}
-                    <span>{product.is_active ? "Active" : "Inactive"}</span>
-                  </div>
-                </div>
-
-                <p className="text-sm font-semibold text-[var(--foreground)]">
-                  {product.currency}{" "}
-                  {(product.price_minor / 100).toFixed(2)}
-                </p>
-              </article>
-            ))}
-          </div>
-        </section>
-      )}
+      ) : <ProductList products={products} />}
     </div>
   );
 }
