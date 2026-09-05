@@ -12,6 +12,9 @@ function errorResponse(message, status, code) {
   );
 }
 
+// Gemini is responsible ONLY for identifying the best primary product(s).
+// Cross-sell recommendations are determined exclusively from merchant-approved
+// growth rules stored in the database. Gemini must never return cross_sell.
 const recommendationSchema = {
   type: "object",
   properties: {
@@ -25,9 +28,8 @@ const recommendationSchema = {
           reason: { type: "string" },
           recommendation_type: {
             type: "string",
-            enum: ["primary", "cross_sell"],
-            description:
-              "Must be 'primary' for the core product answering the buyer request, or 'cross_sell' for an optional complementary add-on from the catalog.",
+            enum: ["primary"],
+            description: "Must always be 'primary'. Never return cross_sell.",
           },
         },
         required: ["product_id", "quantity", "reason", "recommendation_type"],
@@ -119,6 +121,27 @@ export async function POST(request) {
     );
   }
 
+  // Load merchant-approved growth rules. Cross-sell recommendations are
+  // driven exclusively by these rules — never by Gemini.
+  const { data: growthRules, error: growthRulesError } = await supabase
+    .from("merchant_growth_rules")
+    .select("id, trigger_product_id, recommended_product_id, rule_type, reason")
+    .eq("merchant_id", merchantId)
+    .eq("active", true)
+    .eq("rule_type", "cross_sell");
+
+  if (growthRulesError) {
+    return errorResponse(
+      "We could not load the merchant's approved growth rules.",
+      500
+    );
+  }
+
+  // Map keyed by trigger_product_id for O(1) lookups.
+  const growthRulesByTrigger = new Map(
+    (growthRules ?? []).map((rule) => [rule.trigger_product_id, rule])
+  );
+
   const apiKey = process.env.GEMINI_API_KEY;
 
   if (!apiKey) {
@@ -156,7 +179,7 @@ ${JSON.stringify(catalog)}`,
       ],
       config: {
         systemInstruction:
-          "Recommend only products in the supplied catalog. Classification must use recommendation_type: 'primary' for the best direct match to buyer intent (core item directly answering the buyer request) or 'cross_sell' for an optional complementary add-on or accessory from the catalog that directly pairs with the primary item. Only suggest a cross_sell if a credible, relevant complementary product genuinely exists in the catalog; if no credible complementary product exists, return only primary items. Do not force an upsell. Reasons must be grounded in the buyer's intent and cross-sell reasons must be concise, explaining in plain language why it complements the primary choice (e.g. 'Pairs well with your setup by...'). Do not claim 'frequently bought together' or invent purchase history, reviews, ratings, discounts, or specifications. Do not invent products, prices, availability, IDs, or specifications. The catalog prices and IDs are reference data only; do not calculate a payable total. Do not make payment, authorization, spending-limit, or transaction decisions.",
+          "Recommend only products in the supplied catalog. Return primary recommendations only — the best direct match(es) to the buyer's intent. Never return cross_sell in recommendation_type. Do not invent complementary products. Do not suggest add-ons or accessories. Do not calculate a payable total. Do not make payment, authorization, spending-limit, or transaction decisions. Reasons must be grounded in the buyer's stated intent. Do not claim 'frequently bought together' or invent purchase history, reviews, ratings, discounts, or specifications. Do not invent products, prices, availability, IDs, or specifications.",
         responseMimeType: "application/json",
         responseSchema: recommendationSchema,
       },
@@ -169,7 +192,10 @@ ${JSON.stringify(catalog)}`,
     );
 
     const seenProductIds = new Set();
+    const usedGrowthRuleIds = [];
 
+    // Process primary recommendations from Gemini, then append any
+    // merchant-approved cross-sell recommendations derived from growth rules.
     const recommendations = Array.isArray(
       parsed.recommendations
     )
@@ -190,14 +216,8 @@ ${JSON.stringify(catalog)}`,
 
           seenProductIds.add(product.id);
 
-          const rawType =
-            typeof item?.recommendation_type === "string"
-              ? item.recommendation_type.trim().toLowerCase()
-              : "primary";
-          const recommendation_type =
-            rawType === "cross_sell" ? "cross_sell" : "primary";
-
-          return [
+          // Gemini must only return primary. Force it regardless.
+          const result = [
             {
               product_id: product.id,
               name: product.name,
@@ -210,9 +230,32 @@ ${JSON.stringify(catalog)}`,
                 item.reason.trim()
                   ? item.reason.trim()
                   : "Matches your request.",
-              recommendation_type,
+              recommendation_type: "primary",
             },
           ];
+
+          // Look up a merchant-approved growth rule for this primary product.
+          const rule = growthRulesByTrigger.get(product.id);
+          if (rule) {
+            const crossProduct = productsById.get(rule.recommended_product_id);
+            if (crossProduct && !seenProductIds.has(crossProduct.id)) {
+              seenProductIds.add(crossProduct.id);
+              usedGrowthRuleIds.push(rule.id);
+              result.push({
+                product_id: crossProduct.id,
+                name: crossProduct.name,
+                description: crossProduct.description,
+                price_minor: Number(crossProduct.price_minor),
+                currency: crossProduct.currency,
+                quantity: 1,
+                // Reason comes exclusively from the merchant-approved rule.
+                reason: rule.reason,
+                recommendation_type: "cross_sell",
+              });
+            }
+          }
+
+          return result;
         })
       : [];
 
@@ -225,6 +268,10 @@ ${JSON.stringify(catalog)}`,
       recommendations[0].recommendation_type = "primary";
     }
 
+    const hasCrossSell = recommendations.some(
+      (rec) => rec.recommendation_type === "cross_sell"
+    );
+
     await writeAgentAudit({
       merchantId,
       eventType: "ai_recommendation",
@@ -232,11 +279,10 @@ ${JSON.stringify(catalog)}`,
       payload: {
         buyer_text: buyerText,
         recommendation_count: recommendations.length,
-        recommendation_product_ids: recommendations.map(r => r.product_id),
-        recommendation_types: recommendations.map(r => r.recommendation_type),
-        has_cross_sell: recommendations.some(
-          (rec) => rec.recommendation_type === "cross_sell"
-        ),
+        recommendation_product_ids: recommendations.map((r) => r.product_id),
+        recommendation_types: recommendations.map((r) => r.recommendation_type),
+        has_cross_sell: hasCrossSell,
+        approved_growth_rule_ids: usedGrowthRuleIds,
         merchant_ids: [merchantId],
       },
       result: "success",
