@@ -34,7 +34,7 @@ function loadRazorpayScript() {
 }
 
 export const RazorpayCheckout = forwardRef(function RazorpayCheckout(
-  { orderId, amountMinor, currency },
+  { orderId, amountMinor, currency, onPaymentSuccess },
   ref
 ) {
   const [loading, setLoading] = useState(false);
@@ -134,6 +134,9 @@ export const RazorpayCheckout = forwardRef(function RazorpayCheckout(
 
             setPayment(verificationBody.order);
             setMessage(verificationBody.message);
+            if (typeof onPaymentSuccess === "function") {
+              onPaymentSuccess(verificationBody.order);
+            }
           } catch (error) {
             setMessage(
               error instanceof Error

@@ -52,6 +52,19 @@ export default async function BuyerPage() {
     });
   }
 
+  const formattedOrders = (buyerOrders ?? []).map((buyerOrder) => ({
+    ...buyerOrder,
+    total_minor: Number(buyerOrder.total_minor),
+  }));
+
+  const pendingOrders = formattedOrders.filter(
+    (buyerOrder) => buyerOrder.status === "pending"
+  );
+
+  const recentPaidOrders = formattedOrders.filter(
+    (buyerOrder) => buyerOrder.status === "paid"
+  );
+
   return (
     <BuyerShell
       signedIn={true}
@@ -76,10 +89,8 @@ export default async function BuyerPage() {
             }
           : null
       }
-      pendingOrders={(buyerOrders ?? []).map((buyerOrder) => ({
-        ...buyerOrder,
-        total_minor: Number(buyerOrder.total_minor),
-      }))}
+      pendingOrders={pendingOrders}
+      recentPaidOrders={recentPaidOrders}
     />
   );
 }

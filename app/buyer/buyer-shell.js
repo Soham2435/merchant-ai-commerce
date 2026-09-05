@@ -7,11 +7,18 @@ import { createClient } from "@/lib/supabase/client";
 import { RazorpayCheckout } from "@/app/dashboard/orders/razorpay-checkout";
 import { provisionBuyerSpendingAuthorization } from "./actions";
 
+const PROMPT_SUGGESTIONS = [
+  "Running shoes for everyday training under ₹5000",
+  "Mechanical keyboard setup",
+  "Minimalist desk accessories",
+];
+
 export function BuyerShell({
   signedIn,
   merchantContext,
   authorization,
   pendingOrders = [],
+  recentPaidOrders = [],
 }) {
   const supabase = createClient();
   const router = useRouter();
@@ -28,12 +35,25 @@ export function BuyerShell({
   const [selected, setSelected] = useState({});
   const [stage, setStage] = useState("idle");
   const [message, setMessage] = useState("");
-  const [order, setOrder] = useState(pendingOrders[0] ?? null);
+  // Active session order starts clean (null) so past purchases do not hijack fresh sessions
+  const [order, setOrder] = useState(null);
   const [proposedItems, setProposedItems] = useState([]);
   const [approving, setApproving] = useState(false);
   const [approvalError, setApprovalError] = useState("");
   const [pendingCheckoutDismissed, setPendingCheckoutDismissed] =
     useState(false);
+
+  function resetSession() {
+    setOrder(null);
+    setProposedItems([]);
+    setSelected({});
+    setRecommendations([]);
+    setStage("idle");
+    setMessage("");
+    setApprovalError("");
+    setIntent("");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
 
   const [
     authorizationState,
@@ -337,7 +357,7 @@ export function BuyerShell({
     selectedTotalMinor > authorizationLimitMinor;
 
   return (
-    <div className="mx-auto min-h-screen max-w-6xl px-5 py-8 sm:px-8 sm:py-12">
+    <div className={`mx-auto min-h-screen max-w-6xl px-5 py-8 sm:px-8 sm:py-12${order && stage !== "paid" ? " pb-28 lg:pb-12" : ""}`}>
       <header className="flex items-center justify-between gap-4">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--accent)]">
@@ -779,11 +799,17 @@ export function BuyerShell({
               <button
                 type="button"
                 onClick={propose}
-                disabled={stage === "proposing" || selectedCount === 0}
+                disabled={
+                  stage === "proposing" ||
+                  selectedCount === 0 ||
+                  isOverSpendingLimit
+                }
                 className="mt-2 w-full rounded-xl border-2 border-[var(--accent)] bg-[var(--accent)] px-5 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-95 disabled:opacity-50"
               >
                 {stage === "proposing"
                   ? "Checking purchase..."
+                  : isOverSpendingLimit
+                  ? "Exceeds spending limit"
                   : hasCrossSellSelected
                   ? "Review bundle purchase"
                   : "Review purchase"}
@@ -792,7 +818,7 @@ export function BuyerShell({
           ) : null}
         </section>
 
-        <aside className="rounded-3xl border border-[var(--accent)] bg-[var(--accent-dark)] p-6 text-white sm:p-8">
+        <aside id="transaction-rail" className="rounded-3xl border border-[var(--accent)] bg-[var(--accent-dark)] p-6 text-white sm:p-8">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#a9e1cc]">
             Bounded commerce
           </p>
@@ -820,30 +846,66 @@ export function BuyerShell({
 
           {order ? (
             order.approved_at ? (
-              <div className="mt-8 border-t border-white/20 pt-6">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-xs uppercase tracking-[0.14em] text-[#a9e1cc]">
-                    Purchase approved
+              order.status === "paid" ? (
+                <div className="mt-8 border-t border-white/20 pt-6">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs uppercase tracking-[0.14em] text-[#a9e1cc]">
+                      Payment complete
+                    </p>
+
+                    <span className="rounded-full bg-emerald-400/25 px-2.5 py-0.5 text-[10px] font-semibold text-emerald-200">
+                      Verified
+                    </span>
+                  </div>
+
+                  <p className="mt-2 text-2xl font-semibold">
+                    {formatMoney(order.total_minor, order.currency)}
                   </p>
 
-                  <span className="rounded-full bg-emerald-500/20 px-2.5 py-0.5 text-[10px] font-semibold text-[#a9e1cc]">
-                    {order.status === "paid"
-                      ? "Payment complete"
-                      : "Payment ready"}
-                  </span>
+                  <p className="mt-1 text-sm text-[#d9eee6]">
+                    Payment verified by Razorpay and confirmed.
+                  </p>
+
+                  {order.razorpay_payment_id ? (
+                    <div className="mt-4 rounded-xl bg-white/10 px-3 py-3">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#a9e1cc]">
+                        Verified payment ID
+                      </p>
+
+                      <p className="mt-1.5 break-all font-mono text-xs font-medium text-white">
+                        {order.razorpay_payment_id}
+                      </p>
+                    </div>
+                  ) : null}
+
+                  <button
+                    type="button"
+                    onClick={resetSession}
+                    className="mt-6 w-full rounded-xl bg-white px-5 py-3 text-sm font-semibold text-[var(--accent-dark)] shadow-sm transition-opacity hover:opacity-95"
+                  >
+                    Start new search
+                  </button>
                 </div>
+              ) : (
+                <div className="mt-8 border-t border-white/20 pt-6">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs uppercase tracking-[0.14em] text-[#a9e1cc]">
+                      Purchase approved
+                    </p>
 
-                <p className="mt-2 text-2xl font-semibold">
-                  {formatMoney(order.total_minor, order.currency)}
-                </p>
+                    <span className="rounded-full bg-emerald-500/20 px-2.5 py-0.5 text-[10px] font-semibold text-[#a9e1cc]">
+                      Payment ready
+                    </span>
+                  </div>
 
-                <p className="mt-1 text-sm text-[#d9eee6]">
-                  {order.status === "paid"
-                    ? "Order is paid successfully."
-                    : "Purchase approved. Proceed to Razorpay to complete payment."}
-                </p>
+                  <p className="mt-2 text-2xl font-semibold">
+                    {formatMoney(order.total_minor, order.currency)}
+                  </p>
 
-                {order.status !== "paid" ? (
+                  <p className="mt-1 text-sm text-[#d9eee6]">
+                    Purchase approved. Proceed to Razorpay to complete payment.
+                  </p>
+
                   <RazorpayCheckout
                     ref={checkoutRef}
                     orderId={order.id}
@@ -851,8 +913,8 @@ export function BuyerShell({
                     currency={order.currency}
                     onPaymentSuccess={handlePaymentSuccess}
                   />
-                ) : null}
-              </div>
+                </div>
+              )
             ) : (
               <div className="mt-8 border-t border-white/20 pt-6">
                 <div className="flex items-center justify-between gap-2">
@@ -956,6 +1018,71 @@ export function BuyerShell({
           )}
         </aside>
       </div>
+
+      {recentPaidOrders.length > 0 ? (
+        <section className="mt-10">
+          <h2 className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">
+            Recent purchases
+          </h2>
+
+          <div className="mt-3 space-y-2">
+            {recentPaidOrders.map((paidOrder) => (
+              <div
+                key={paidOrder.id}
+                className="flex items-center justify-between rounded-xl border bg-[var(--surface)] px-4 py-3"
+              >
+                <div className="min-w-0">
+                  <p className="text-[11px] text-[var(--muted)]">
+                    {new Date(paidOrder.created_at).toLocaleDateString(
+                      "en-IN",
+                      { day: "numeric", month: "short", year: "numeric" }
+                    )}
+                  </p>
+
+                  <p className="mt-0.5 font-mono text-xs font-medium text-[var(--foreground)]">
+                    #{paidOrder.id.slice(-8).toUpperCase()}
+                  </p>
+                </div>
+
+                <div className="ml-4 flex shrink-0 items-center gap-3">
+                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">
+                    Paid
+                  </span>
+
+                  <p className="text-sm font-semibold text-[var(--foreground)]">
+                    {formatMoney(paidOrder.total_minor, paidOrder.currency)}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {order && stage !== "paid" ? (
+        <div className="fixed bottom-0 left-0 right-0 z-50 lg:hidden">
+          <div className="border-t bg-[var(--surface)] px-4 py-3 shadow-[0_-4px_20px_rgba(0,0,0,0.08)]">
+            <div className="mx-auto flex max-w-6xl items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--accent)]">
+                  {!order.approved_at ? "Approval required" : "Payment ready"}
+                </p>
+
+                <p className="mt-0.5 truncate text-sm font-semibold text-[var(--foreground)]">
+                  {formatMoney(order.total_minor, order.currency)}
+                </p>
+              </div>
+
+              <a
+                href="#transaction-rail"
+                className="shrink-0 rounded-xl bg-[var(--accent)] px-4 py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90"
+              >
+                {!order.approved_at ? "Approve →" : "Pay →"}
+              </a>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
