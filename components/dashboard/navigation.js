@@ -10,6 +10,7 @@ const navigation = [
   { label: "Customers", href: "/dashboard/customers" },
   { label: "AI Activity", href: "/dashboard/ai-insights" },
   { label: "Settings", href: "/dashboard/settings" },
+  { label: "AI Growth", href: "/dashboard/ai-growth" },
 ];
 
 function isActive(pathname, href) {
