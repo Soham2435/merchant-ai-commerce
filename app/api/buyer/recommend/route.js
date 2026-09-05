@@ -1,32 +1,8 @@
-import { GoogleGenAI, Type } from "@google/genai";
 import { createClient } from "@/lib/supabase/server";
 import { writeAgentAudit } from "@/lib/agent-audit";
 
-export const runtime = "nodejs";
 
-const recommendationSchema = {
-  type: Type.OBJECT,
-  properties: {
-    recommendations: {
-      type: Type.ARRAY,
-      items: {
-        type: Type.OBJECT,
-        properties: {
-          product_id: { type: Type.STRING },
-          quantity: { type: Type.INTEGER },
-          reason: { type: Type.STRING },
-          recommendation_type: {
-            type: Type.STRING,
-            description:
-              "Must be 'primary' for the core product answering the buyer request, or 'cross_sell' for an optional complementary add-on from the catalog.",
-          },
-        },
-        required: ["product_id", "quantity", "reason"],
-      },
-    },
-  },
-  required: ["recommendations"],
-};
+export const runtime = "nodejs";
 
 function errorResponse(message, status, code) {
   return Response.json(
@@ -34,6 +10,34 @@ function errorResponse(message, status, code) {
     { status }
   );
 }
+
+const recommendationSchema = {
+  type: "object",
+  properties: {
+    recommendations: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          product_id: { type: "string" },
+          quantity: { type: "integer" },
+          reason: { type: "string" },
+          recommendation_type: {
+            type: "string",
+            enum: ["primary", "cross_sell"],
+            description:
+              "Must be 'primary' for the core product answering the buyer request, or 'cross_sell' for an optional complementary add-on from the catalog.",
+          },
+        },
+        required: ["product_id", "quantity", "reason", "recommendation_type"],
+      },
+    },
+  },
+  required: ["recommendations"],
+};
+
+
+
 
 export async function POST(request) {
   const supabase = await createClient();
@@ -152,7 +156,7 @@ ${JSON.stringify(catalog)}`,
       ],
       config: {
         systemInstruction:
-          "Recommend only products in the supplied catalog. Classify each product with recommendation_type: 'primary' (core item directly answering the buyer request) or 'cross_sell' (an optional complementary add-on or accessory from the catalog that directly pairs with the primary item). Only suggest a cross_sell if a credible, relevant complementary product genuinely exists in the catalog; if no credible complementary product exists, return only primary items. Do not force an upsell. Cross-sell reasons must be concise and explain in plain language why it complements the primary choice (e.g. 'Pairs well with your setup by...'). Do not claim 'frequently bought together' or invent purchase history. Do not invent products, prices, availability, IDs, discounts, or specifications. The catalog prices and IDs are reference data only; do not calculate a payable total.",
+          "Recommend only products in the supplied catalog. Classification must use recommendation_type: 'primary' for the best direct match to buyer intent (core item directly answering the buyer request) or 'cross_sell' for an optional complementary add-on or accessory from the catalog that directly pairs with the primary item. Only suggest a cross_sell if a credible, relevant complementary product genuinely exists in the catalog; if no credible complementary product exists, return only primary items. Do not force an upsell. Reasons must be grounded in the buyer's intent and cross-sell reasons must be concise, explaining in plain language why it complements the primary choice (e.g. 'Pairs well with your setup by...'). Do not claim 'frequently bought together' or invent purchase history, reviews, ratings, discounts, or specifications. Do not invent products, prices, availability, IDs, or specifications. The catalog prices and IDs are reference data only; do not calculate a payable total. Do not make payment, authorization, spending-limit, or transaction decisions.",
         responseMimeType: "application/json",
         responseSchema: recommendationSchema,
       },
@@ -228,6 +232,8 @@ ${JSON.stringify(catalog)}`,
       payload: {
         buyer_text: buyerText,
         recommendation_count: recommendations.length,
+        recommendation_product_ids: recommendations.map(r => r.product_id),
+        recommendation_types: recommendations.map(r => r.recommendation_type),
         has_cross_sell: recommendations.some(
           (rec) => rec.recommendation_type === "cross_sell"
         ),
