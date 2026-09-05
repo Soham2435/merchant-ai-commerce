@@ -1,0 +1,1 @@
+grant select on table public.merchant_growth_rules to authenticated;
