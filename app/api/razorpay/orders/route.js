@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { supabaseAdmin } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
 
@@ -127,36 +128,12 @@ export async function POST(request) {
     return jsonError("A valid order_id is required.", 400);
   }
 
-  const { data: memberships, error: membershipError } = await supabase
-    .from("merchant_members")
-    .select("merchant_id")
-    .eq("user_id", user.id);
-
-  if (membershipError) {
-    console.error("Razorpay order membership lookup failed", {
-      code: membershipError.code ?? "unknown",
-      status: membershipError.status ?? "unknown",
-    });
-
-    return jsonError("We could not verify your merchant workspace.", 500);
-  }
-
-  if (!memberships || memberships.length !== 1) {
-    return jsonError(
-      "Razorpay checkout currently requires exactly one merchant workspace.",
-      403
-    );
-  }
-
-  const merchantId = memberships[0].merchant_id;
-
   const { data: order, error: orderError } = await supabase
     .from("orders")
     .select(
-      "id, merchant_id, status, total_minor, currency, razorpay_order_id"
+      "id, merchant_id, buyer_user_id, status, total_minor, currency, razorpay_order_id, approved_at"
     )
     .eq("id", orderId)
-    .eq("merchant_id", merchantId)
     .maybeSingle();
 
   if (orderError) {
@@ -172,11 +149,47 @@ export async function POST(request) {
     return jsonError("Order not found.", 404);
   }
 
+  const isBuyer = order.buyer_user_id === user.id;
+  let isMerchantMember = false;
+
+  if (!isBuyer) {
+    const { data: membership, error: membershipError } = await supabase
+      .from("merchant_members")
+      .select("merchant_id")
+      .eq("user_id", user.id)
+      .eq("merchant_id", order.merchant_id)
+      .maybeSingle();
+
+    if (membershipError) {
+      console.error("Razorpay order membership lookup failed", {
+        code: membershipError.code ?? "unknown",
+        status: membershipError.status ?? "unknown",
+      });
+
+      return jsonError("We could not verify order access.", 500);
+    }
+
+    isMerchantMember = Boolean(membership);
+  }
+
+  if (!isBuyer && !isMerchantMember) {
+    return jsonError(
+      "You are not authorized to process payment for this order.",
+      403
+    );
+  }
+
+  const merchantId = order.merchant_id;
+
   if (order.status !== "pending") {
     return jsonError(
       `This order cannot be paid because its status is ${order.status}.`,
       409
     );
+  }
+
+  if (!order.approved_at) {
+    return jsonError("This purchase has not been approved yet.", 409);
   }
 
   const amountMinor = Number(order.total_minor);
@@ -301,7 +314,7 @@ export async function POST(request) {
     );
   }
 
-  const { data: updatedOrder, error: updateError } = await supabase
+  let updateQuery = supabaseAdmin
     .from("orders")
     .update({
       razorpay_order_id: razorpayBody.id,
@@ -309,29 +322,54 @@ export async function POST(request) {
     .eq("id", order.id)
     .eq("merchant_id", merchantId)
     .eq("status", "pending")
-    .is("razorpay_order_id", null)
+    .is("razorpay_order_id", null);
+
+  if (isBuyer) {
+    updateQuery = updateQuery.eq("buyer_user_id", user.id);
+  }
+
+  const { data: updatedOrder, error: updateError } = await updateQuery
     .select("id, razorpay_order_id, total_minor, currency")
     .maybeSingle();
 
   if (updateError) {
-    console.error("Razorpay order persistence failed", {
-      code: updateError.code ?? "unknown",
-      status: updateError.status ?? "unknown",
-    });
+  console.error("Razorpay order persistence failed", {
+    code: updateError.code ?? "unknown",
+    status: updateError.status ?? "unknown",
+    message: updateError.message ?? "unknown",
+    details: updateError.details ?? "unknown",
+    hint: updateError.hint ?? "unknown",
+  });
+}
 
-    return jsonError(
-      "The Razorpay order was created but could not be safely linked to the merchant order. No payment has been marked as successful.",
-      500
-    );
-  }
+  if (updateError) {
+  console.error("Razorpay order persistence failed", {
+    code: updateError.code ?? "unknown",
+    status: updateError.status ?? "unknown",
+    message: updateError.message ?? "unknown",
+    details: updateError.details ?? "unknown",
+    hint: updateError.hint ?? "unknown",
+  });
+
+  return jsonError(
+    "The Razorpay order was created but could not be safely linked to the merchant order. No payment has been marked as successful.",
+    500
+  );
+}
 
   if (!updatedOrder) {
-    const { data: currentOrder, error: currentOrderError } = await supabase
+    let reconQuery = supabaseAdmin
       .from("orders")
       .select("id, razorpay_order_id, total_minor, currency, status")
       .eq("id", order.id)
-      .eq("merchant_id", merchantId)
-      .maybeSingle();
+      .eq("merchant_id", merchantId);
+
+    if (isBuyer) {
+      reconQuery = reconQuery.eq("buyer_user_id", user.id);
+    }
+
+    const { data: currentOrder, error: currentOrderError } =
+      await reconQuery.maybeSingle();
 
     if (currentOrderError || !currentOrder) {
       return jsonError(

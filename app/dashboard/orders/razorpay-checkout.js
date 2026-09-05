@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { forwardRef, useImperativeHandle, useRef, useState } from "react";
 
 let razorpayScriptPromise;
 
@@ -18,11 +18,14 @@ function loadRazorpayScript() {
       const script = document.createElement("script");
       script.src = "https://checkout.razorpay.com/v1/checkout.js";
       script.async = true;
+
       script.onload = () => resolve();
+
       script.onerror = () => {
         razorpayScriptPromise = null;
         reject(new Error("Razorpay Checkout could not be loaded."));
       };
+
       document.body.appendChild(script);
     });
   }
@@ -30,7 +33,10 @@ function loadRazorpayScript() {
   return razorpayScriptPromise;
 }
 
-export function RazorpayCheckout({ orderId, amountMinor, currency }) {
+export const RazorpayCheckout = forwardRef(function RazorpayCheckout(
+  { orderId, amountMinor, currency },
+  ref
+) {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [payment, setPayment] = useState(null);
@@ -46,8 +52,13 @@ export function RazorpayCheckout({ orderId, amountMinor, currency }) {
     try {
       await fetch("/api/buyer/checkout-event", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ order_id: orderId, reason }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          order_id: orderId,
+          reason,
+        }),
         keepalive: true,
       });
     } catch {
@@ -70,8 +81,11 @@ export function RazorpayCheckout({ orderId, amountMinor, currency }) {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ order_id: orderId }),
+        body: JSON.stringify({
+          order_id: orderId,
+        }),
       });
+
       const orderBody = await orderResponse.json();
 
       if (!orderResponse.ok || !orderBody.success) {
@@ -83,6 +97,7 @@ export function RazorpayCheckout({ orderId, amountMinor, currency }) {
       await loadRazorpayScript();
 
       const paymentOrder = orderBody.order;
+
       const checkout = new window.Razorpay({
         key: orderBody.key_id,
         amount: paymentOrder.amount,
@@ -90,6 +105,7 @@ export function RazorpayCheckout({ orderId, amountMinor, currency }) {
         name: "Merchant AI Commerce",
         description: `Payment for order ${orderId}`,
         order_id: paymentOrder.razorpay_order_id,
+
         handler: async (response) => {
           try {
             const verificationResponse = await fetch(
@@ -107,6 +123,7 @@ export function RazorpayCheckout({ orderId, amountMinor, currency }) {
                 }),
               }
             );
+
             const verificationBody = await verificationResponse.json();
 
             if (!verificationResponse.ok || !verificationBody.success) {
@@ -127,10 +144,13 @@ export function RazorpayCheckout({ orderId, amountMinor, currency }) {
             setLoading(false);
           }
         },
+
         modal: {
           ondismiss: () => {
             setLoading(false);
+
             void recordCheckoutFailure("checkout_cancelled");
+
             setMessage(
               "Checkout was cancelled. No successful payment was recorded."
             );
@@ -140,7 +160,9 @@ export function RazorpayCheckout({ orderId, amountMinor, currency }) {
 
       checkout.on("payment.failed", () => {
         setLoading(false);
+
         void recordCheckoutFailure("payment_failed");
+
         setMessage(
           "Razorpay reported a failed payment. No successful payment was recorded."
         );
@@ -149,7 +171,9 @@ export function RazorpayCheckout({ orderId, amountMinor, currency }) {
       checkout.open();
     } catch (error) {
       setLoading(false);
+
       void recordCheckoutFailure("checkout_error");
+
       setMessage(
         error instanceof Error
           ? error.message
@@ -158,6 +182,10 @@ export function RazorpayCheckout({ orderId, amountMinor, currency }) {
     }
   }
 
+  useImperativeHandle(ref, () => ({
+    startPayment,
+  }));
+
   return (
     <section className="mt-5 border-t pt-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -165,11 +193,13 @@ export function RazorpayCheckout({ orderId, amountMinor, currency }) {
           <p className="text-sm font-semibold text-[var(--foreground)]">
             Payment state
           </p>
+
           <p className="mt-1 text-xs text-[var(--muted)]">
             Razorpay Test Mode. The server verifies the payment before marking
             this order paid.
           </p>
         </div>
+
         <span className="rounded-full bg-[var(--surface)] px-2.5 py-1 text-xs font-semibold capitalize text-[var(--accent-dark)]">
           {payment?.status ?? "pending"}
         </span>
@@ -179,6 +209,7 @@ export function RazorpayCheckout({ orderId, amountMinor, currency }) {
         <dl className="mt-4 space-y-2 text-sm">
           <div className="flex justify-between gap-4">
             <dt className="text-[var(--muted)]">Verified payment ID</dt>
+
             <dd className="max-w-[13rem] truncate font-medium text-[var(--foreground)]">
               {payment.razorpay_payment_id}
             </dd>
@@ -211,7 +242,7 @@ export function RazorpayCheckout({ orderId, amountMinor, currency }) {
       </p>
     </section>
   );
-}
+});
 
 function formatMoney(minor, currency) {
   return new Intl.NumberFormat("en-IN", {
